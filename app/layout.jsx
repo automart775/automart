@@ -1,4 +1,5 @@
 import "./globals.css";
+import NavBar from "../components/NavBar";
 
 export const metadata = {
   title: "AutoMarket — Buy, Sell, and Bid on Vehicles",
@@ -15,7 +16,10 @@ export default function RootLayout({ children }) {
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        <NavBar />
+        {children}
+      </body>
     </html>
   );
 }
