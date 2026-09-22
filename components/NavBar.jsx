@@ -31,6 +31,7 @@ export default function NavBar() {
         </Link>
         <div className="flex items-center gap-5 text-sm font-medium">
           <Link href="/" className="text-gray-600 hover:text-black">Browse</Link>
+          <Link href="/search" className="text-gray-600 hover:text-black">Search</Link>
           <Link href="/sell" className="text-gray-600 hover:text-black">Sell a vehicle</Link>
           {!loaded ? null : user ? (
             <>
