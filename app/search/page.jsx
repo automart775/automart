@@ -16,11 +16,14 @@ export default async function SearchPage({ searchParams }) {
   const { listings, isDemo } = await getActiveListings();
   const type = searchParams?.type || "all";
   const price = searchParams?.price || "any";
+  const q = (searchParams?.q || "").trim().toLowerCase();
 
   const filtered = listings.filter((l) => {
     const typeOk = type === "all" || l.listing_type === type;
     const priceOk = l.listing_type === "auction" ? true : inRange(Number(l.price), price);
-    return typeOk && priceOk;
+    const text = `${l.make} ${l.model} ${l.description || ""}`.toLowerCase();
+    const qOk = !q || text.includes(q);
+    return typeOk && priceOk && qOk;
   });
 
   const typeChips = [
@@ -39,6 +42,21 @@ export default async function SearchPage({ searchParams }) {
     <main className="max-w-5xl mx-auto px-6 py-10">
       <h1 className="font-display text-2xl font-bold mb-4">Browse</h1>
 
+      <form method="GET" className="flex gap-2 mb-5">
+        <input type="hidden" name="type" value={type} />
+        <input type="hidden" name="price" value={price} />
+        <input
+          name="q"
+          defaultValue={q}
+          placeholder="Search make or model (e.g. Toyota, Camry)"
+          className="flex-1 border rounded-xl px-4 py-2.5 text-sm"
+          style={{ borderColor: "var(--border)" }}
+        />
+        <button type="submit" className="rounded-xl px-5 py-2.5 text-sm font-semibold text-white" style={{ background: "var(--ink)" }}>
+          Search
+        </button>
+      </form>
+
       {isDemo && (
         <div className="mb-6 text-xs font-mono px-3 py-2 rounded-lg inline-block" style={{ background: "#FDF1DD", color: "var(--accent-dark)" }}>
           Showing demo listings — connect real data in Supabase to replace these.
@@ -49,7 +67,7 @@ export default async function SearchPage({ searchParams }) {
         {typeChips.map((c) => (
           <Link
             key={c.key}
-            href={`/search?type=${c.key}&price=${price}`}
+            href={`/search?type=${c.key}&price=${price}&q=${encodeURIComponent(q)}`}
             className="text-xs font-semibold px-3 py-1.5 rounded-full border"
             style={{
               borderColor: type === c.key ? "var(--ink)" : "var(--border)",
@@ -65,7 +83,7 @@ export default async function SearchPage({ searchParams }) {
         {priceChips.map((c) => (
           <Link
             key={c.key}
-            href={`/search?type=${type}&price=${c.key}`}
+            href={`/search?type=${type}&price=${c.key}&q=${encodeURIComponent(q)}`}
             className="text-xs font-semibold px-3 py-1.5 rounded-full border"
             style={{
               borderColor: price === c.key ? "var(--ink)" : "var(--border)",

@@ -11,12 +11,32 @@ export default function AuctionBidClient({ listing }) {
   const [bid, setBid] = useState(Number(listing.current_bid || listing.start_price || 0));
   const [history, setHistory] = useState([]);
   const [pendingBid, setPendingBid] = useState(null);
+  const [customAmount, setCustomAmount] = useState("");
   const [toast, setToast] = useState("");
+  const [toastTone, setToastTone] = useState("success");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    getBidsForAuction(listing.auction_id).then(setHistory);
+    if (listing.auction_id) getBidsForAuction(listing.auction_id).then(setHistory);
   }, [listing.auction_id]);
+
+  const showToast = (text, tone = "success") => {
+    setToast(text);
+    setToastTone(tone);
+    setTimeout(() => setToast(""), 3500);
+  };
+
+  const startBid = (amount) => {
+    if (!listing.auction_id) {
+      showToast("This is demo data — create a real auction from the Sell page to test bidding.", "error");
+      return;
+    }
+    if (!amount || amount <= bid) {
+      showToast("Enter an amount higher than the current bid.", "error");
+      return;
+    }
+    setPendingBid(amount);
+  };
 
   const confirmBid = async () => {
     if (!pendingBid) return;
@@ -29,25 +49,49 @@ export default function AuctionBidClient({ listing }) {
       return;
     }
 
+    // Remember who was leading before this bid, to notify them they've been outbid
+    const previousLeader = history[0];
+
     const { error: bidError } = await supabase.from("bids").insert({
       auction_id: listing.auction_id,
       bidder_id: userData.user.id,
       amount: pendingBid,
     });
 
-    if (!bidError) {
-      await supabase.from("auctions").update({ current_bid: pendingBid }).eq("id", listing.auction_id);
-      setBid(pendingBid);
-      const bids = await getBidsForAuction(listing.auction_id);
-      setHistory(bids);
-      setToast("Bid placed — you're the highest bidder!");
-      setTimeout(() => setToast(""), 2500);
-    } else {
-      setToast("Something went wrong placing your bid.");
-      setTimeout(() => setToast(""), 2500);
+    if (bidError) {
+      showToast(`Couldn't place bid: ${bidError.message}`, "error");
+      setPendingBid(null);
+      setBusy(false);
+      return;
     }
 
+    const { error: updateError } = await supabase
+      .from("auctions")
+      .update({ current_bid: pendingBid })
+      .eq("id", listing.auction_id);
+
+    if (updateError) {
+      showToast(`Bid recorded, but couldn't update the price shown: ${updateError.message}`, "error");
+    } else {
+      showToast("Bid placed — you're the highest bidder!");
+    }
+
+    // Log an outbid notification for whoever was leading before (foundation
+    // for email alerts once a mail provider like Resend is connected —
+    // for now this just records that they need to be told).
+    if (previousLeader && previousLeader.bidder_name) {
+      await supabase.from("email_notifications").insert({
+        user_id: userData.user.id, // placeholder: ideally the previous bidder's id, once bids table exposes it directly to the client
+        notification_type: "bid_outbid",
+        related_id: listing.id,
+      }).select().maybeSingle();
+    }
+
+    setBid(pendingBid);
+    const bids = await getBidsForAuction(listing.auction_id);
+    setHistory(bids);
     setPendingBid(null);
+    setCustomAmount("");
     setBusy(false);
   };
 
@@ -87,8 +131,11 @@ export default function AuctionBidClient({ listing }) {
       </div>
 
       {toast && (
-        <div className="mt-4 flex items-center gap-2 px-3 py-2.5 rounded-xl" style={{ background: "var(--success)" }}>
-          <Check size={15} color="#fff" />
+        <div
+          className="mt-4 flex items-center gap-2 px-3 py-2.5 rounded-xl"
+          style={{ background: toastTone === "error" ? "var(--danger)" : "var(--success)" }}
+        >
+          {toastTone === "error" ? <X size={15} color="#fff" /> : <Check size={15} color="#fff" />}
           <span className="text-xs font-semibold text-white">{toast}</span>
         </div>
       )}
@@ -99,10 +146,10 @@ export default function AuctionBidClient({ listing }) {
             <div className="flex-1 text-center text-sm font-semibold py-3 rounded-xl font-mono" style={{ background: "#EAF0F6", color: "var(--ink)" }}>
               Confirm ${pendingBid.toLocaleString()}?
             </div>
-            <button onClick={() => setPendingBid(null)} className="p-3 rounded-xl" style={{ background: "#EAF0F6" }}>
+            <button type="button" onClick={() => setPendingBid(null)} className="p-3 rounded-xl" style={{ background: "#EAF0F6" }}>
               <X size={16} color="var(--ink)" />
             </button>
-            <button onClick={confirmBid} disabled={busy} className="p-3 rounded-xl active:scale-95 transition-all disabled:opacity-60" style={{ background: "var(--accent)" }}>
+            <button type="button" onClick={confirmBid} disabled={busy} className="p-3 rounded-xl active:scale-95 transition-all disabled:opacity-60" style={{ background: "var(--accent)" }}>
               <Check size={16} color="var(--ink-dark)" />
             </button>
           </div>
@@ -112,7 +159,8 @@ export default function AuctionBidClient({ listing }) {
               {[bid + 250, bid + 500, bid + 1000].map((amt) => (
                 <button
                   key={amt}
-                  onClick={() => setPendingBid(amt)}
+                  type="button"
+                  onClick={() => startBid(amt)}
                   className="flex-1 text-center text-xs font-semibold py-1.5 rounded-lg active:scale-95 transition-all font-mono"
                   style={{ background: "#EAF0F6", color: "var(--ink)" }}
                 >
@@ -120,12 +168,34 @@ export default function AuctionBidClient({ listing }) {
                 </button>
               ))}
             </div>
+
+            <div className="flex gap-2 mb-2">
+              <input
+                type="number"
+                min={bid + 1}
+                placeholder={`Custom amount (min $${(bid + 1).toLocaleString()})`}
+                value={customAmount}
+                onChange={(e) => setCustomAmount(e.target.value)}
+                className="flex-1 border rounded-lg px-3 py-2 text-sm font-mono"
+                style={{ borderColor: "var(--border)" }}
+              />
+              <button
+                type="button"
+                onClick={() => startBid(Number(customAmount))}
+                className="rounded-lg px-4 text-xs font-semibold"
+                style={{ background: "#EAF0F6", color: "var(--ink)" }}
+              >
+                Use amount
+              </button>
+            </div>
+
             <button
-              onClick={() => setPendingBid(bid + 250)}
-              className="w-full rounded-xl font-semibold text-sm py-3 text-white"
+              type="button"
+              onClick={() => startBid(bid + 250)}
+              className="w-full rounded-xl font-semibold text-sm py-3"
               style={{ background: "var(--accent)", color: "var(--ink-dark)" }}
             >
-              Place bid
+              Quick bid +$250
             </button>
           </>
         )}
