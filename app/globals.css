@@ -3,19 +3,42 @@
 @tailwind utilities;
 
 :root {
-  --ink: #16181d;
-  --paper: #f5f6f8;
-  --accent: #2f6fed;
-  --muted: #767e8c;
+  --ink: #1e3a5f;
+  --ink-dark: #0f2439;
+  --ink-soft: #eaf0f6;
+  --paper: #f6f7fa;
+  --accent: #f2a93b;
+  --accent-dark: #d98f0e;
+  --muted: #69758a;
+  --border: #ebeef2;
+  --success: #2f9e44;
+  --success-soft: #e7f6ea;
+  --danger: #d6472f;
+  --danger-soft: #fceae6;
+  --gold: #f2a93b;
+  --gold-dark: #c17f1a;
 }
+
+* { box-sizing: border-box; }
+
+html { overflow-x: hidden; }
 
 body {
   margin: 0;
   background: var(--paper);
   color: var(--ink);
   font-family: "Inter", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
-.font-display {
-  font-family: "Space Grotesk", sans-serif;
-}
+.font-display { font-family: "Space Grotesk", sans-serif; }
+.font-mono { font-family: "IBM Plex Mono", monospace; }
+
+/* Prevent any element from causing horizontal overflow */
+img, video, iframe, table { max-width: 100%; }
+
+/* Smooth transitions on interactive elements */
+button, a { transition: opacity 0.15s, transform 0.15s; }
+button:active { transform: scale(0.97); }
