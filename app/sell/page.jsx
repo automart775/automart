@@ -60,7 +60,7 @@ export default function SellPage() {
         p_model: form.model.trim(),
         p_year: parseInt(form.year, 10),
         p_price: form.listing_type === "fixed_price" ? parseFloat(form.price) : null,
-        p_mileage: form.mileage.trim(),
+        p_mileage: parseInt(form.mileage, 10),
         p_fuel_type: form.fuel_type,
         p_transmission: form.transmission,
         p_body_style: form.body_style,
