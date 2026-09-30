@@ -1,114 +1,189 @@
-import { getListingByIdReal } from "../../../lib/listings";
+"use client";
+import { useState, useEffect } from "react";
+import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { CheckCircle } from "lucide-react";
+import { supabase } from "../../../lib/supabaseClient";
 
-export default async function QuotePage({ params }) {
-  const { listing } = await getListingByIdReal(params.id);
-  if (!listing) return <main className="p-10">Listing not found.</main>;
+export default function QuotePage() {
+  const params = useParams();
+  const router = useRouter();
+  const listingId = params?.id;   // ← correct: reads the [id] segment as UUID
 
-  const quoteRef = `AM-${params.id.slice(0,6).toUpperCase()}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
-  const today = new Date();
-  const validUntil = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const fmt = (d) => d.toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
+  const [listing, setListing] = useState(null);
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
 
-  const price = Number(listing.price || listing.current_bid || listing.start_price || 0);
-  const deposit10 = Math.ceil(price * 0.1);
-  const deposit20 = Math.ceil(price * 0.2);
-  const platformFee = Math.ceil(price * 0.01);
-  const total = price + platformFee;
+  const [offerPrice, setOfferPrice] = useState("");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!listingId || listingId === "undefined") {
+      setNotFound(true);
+      setLoading(false);
+      return;
+    }
+
+    const load = async () => {
+      const [authRes, listingRes] = await Promise.all([
+        supabase.auth.getUser(),
+        supabase
+          .from("listings")
+          .select("id, make, model, year, price, listing_type, listing_images(storage_path, sort_order)")
+          .eq("id", listingId)
+          .single(),
+      ]);
+
+      if (authRes.data?.user) setUser(authRes.data.user);
+      if (!listingRes.data || listingRes.error) { setNotFound(true); }
+      else setListing(listingRes.data);
+      setLoading(false);
+    };
+    load();
+  }, [listingId]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!user) { router.push("/login"); return; }
+    setError("");
+    setSubmitting(true);
+
+    const { error: e } = await supabase.rpc("create_quote_request", {
+      p_listing_id: listingId,
+      p_offer_price: offerPrice ? parseFloat(offerPrice) : null,
+      p_message: message.trim(),
+    });
+
+    setSubmitting(false);
+    if (e) {
+      setError("Couldn't send quote request: " + e.message);
+    } else {
+      setSubmitted(true);
+    }
+  };
+
+  const getThumb = () => {
+    if (!listing?.listing_images?.length) return null;
+    const sorted = [...listing.listing_images].sort((a, b) => a.sort_order - b.sort_order);
+    try {
+      const { data } = supabase.storage.from("listing-images").getPublicUrl(sorted[0].storage_path);
+      return data?.publicUrl || null;
+    } catch { return null; }
+  };
+
+  if (loading) return <main className="p-8 text-sm" style={{ color: "var(--muted)" }}>Loading…</main>;
+
+  if (notFound) return (
+    <main className="mx-auto px-4 py-16 text-center" style={{ maxWidth: 420 }}>
+      <p className="font-semibold" style={{ color: "var(--ink)" }}>Listing not found</p>
+      <Link href="/search" className="text-sm mt-2 block" style={{ color: "var(--muted)" }}>Browse listings →</Link>
+    </main>
+  );
+
+  if (submitted) return (
+    <main className="mx-auto px-4 py-16 text-center" style={{ maxWidth: 420 }}>
+      <CheckCircle size={48} className="mx-auto mb-4" style={{ color: "#2F9E44" }} />
+      <h1 className="text-xl font-bold mb-2" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>
+        Quote request sent!
+      </h1>
+      <p className="text-sm mb-6" style={{ color: "var(--muted)" }}>
+        The seller will review your request and get back to you.
+      </p>
+      <Link href={`/listing/${listingId}`}
+        className="inline-block px-6 py-3 rounded-xl text-sm font-semibold text-white"
+        style={{ background: "var(--ink)" }}>
+        Back to listing
+      </Link>
+    </main>
+  );
+
+  const thumb = getThumb();
 
   return (
-    <main className="mx-auto px-4 py-8" style={{ maxWidth:700 }}>
-      {/* Print button */}
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="font-display text-xl font-bold" style={{ fontFamily:"'Space Grotesk',sans-serif" }}>Vehicle Quote</h1>
-        <button onClick={() => window.print()} className="text-sm font-semibold px-4 py-2 rounded-lg text-white" style={{ background:"var(--ink)" }}>
-          Print / Save PDF
-        </button>
-      </div>
+    <main className="mx-auto px-4 py-8" style={{ maxWidth: 480 }}>
+      <h1 className="text-2xl font-bold mb-1" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>
+        Get a quote
+      </h1>
+      <p className="text-sm mb-5" style={{ color: "var(--muted)" }}>
+        Send the seller your offer and any questions.
+      </p>
 
-      <div className="bg-white rounded-2xl p-6" style={{ boxShadow:"0 1px 2px rgba(20,33,61,0.04), 0 6px 16px rgba(20,33,61,0.05)" }}>
-        {/* Header */}
-        <div className="flex items-start justify-between pb-5 mb-5" style={{ borderBottom:"1.5px solid var(--border)" }}>
+      {/* Listing preview */}
+      {listing && (
+        <div className="flex items-center gap-3 rounded-2xl p-3 mb-6"
+          style={{ background: "var(--paper)" }}>
+          {thumb && (
+            <div className="w-16 h-12 rounded-lg overflow-hidden flex-shrink-0">
+              <img src={thumb} alt="" className="w-full h-full object-cover" />
+            </div>
+          )}
           <div>
-            <p className="font-bold text-lg" style={{ fontFamily:"'Space Grotesk',sans-serif", color:"var(--ink)" }}>AutoMarket</p>
-            <p className="text-xs mt-0.5" style={{ color:"var(--muted)" }}>automart-three.vercel.app</p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color:"var(--muted)" }}>Quote Reference</p>
-            <p className="font-mono font-bold text-base" style={{ color:"var(--ink)" }}>{quoteRef}</p>
-            <p className="text-xs mt-0.5" style={{ color:"var(--muted)" }}>Issued: {fmt(today)}</p>
-            <p className="text-xs" style={{ color:"var(--muted)" }}>Valid until: {fmt(validUntil)}</p>
-          </div>
-        </div>
-
-        {/* Vehicle */}
-        <h2 className="text-xs font-semibold uppercase tracking-wide mb-3" style={{ color:"var(--muted)" }}>Vehicle Details</h2>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-2 mb-6">
-          {[
-            ["Make", listing.make],
-            ["Model", listing.model],
-            ["Year", listing.year],
-            ["Body Style", listing.body_style || "—"],
-            ["Mileage", listing.mileage || "—"],
-            ["Fuel Type", listing.fuel_type || "—"],
-            ["Transmission", listing.transmission || "—"],
-            ["Location", [listing.location_city, listing.location_country].filter(Boolean).join(", ") || "—"],
-          ].map(([label, val]) => (
-            <div key={label} className="flex justify-between py-1.5" style={{ borderBottom:"1px solid var(--border)" }}>
-              <span className="text-xs" style={{ color:"var(--muted)" }}>{label}</span>
-              <span className="text-xs font-semibold" style={{ color:"var(--ink)" }}>{val}</span>
+            <div className="text-sm font-semibold" style={{ color: "var(--ink)", fontFamily: "'Space Grotesk',sans-serif" }}>
+              {listing.year} {listing.make} {listing.model}
             </div>
-          ))}
-        </div>
-
-        {/* Seller */}
-        <h2 className="text-xs font-semibold uppercase tracking-wide mb-3" style={{ color:"var(--muted)" }}>Seller</h2>
-        <div className="flex items-center gap-3 p-3 rounded-xl mb-6" style={{ background:"var(--paper)" }}>
-          <div className="flex-1">
-            <p className="text-sm font-semibold" style={{ color:"var(--ink)" }}>{listing.seller_name}</p>
-            <p className="text-xs" style={{ color:"var(--muted)" }}>{listing.seller_role === "dealer" ? "Dealership" : "Private seller"}{listing.seller_verified ? " · Verified by AutoMarket" : ""}</p>
-          </div>
-        </div>
-
-        {/* Pricing */}
-        <h2 className="text-xs font-semibold uppercase tracking-wide mb-3" style={{ color:"var(--muted)" }}>Pricing Breakdown</h2>
-        <div className="rounded-xl overflow-hidden mb-2" style={{ border:"1px solid var(--border)" }}>
-          {[
-            ["Vehicle asking price", `$${price.toLocaleString()}`],
-            ["AutoMarket platform fee (1%)", `$${platformFee.toLocaleString()}`],
-          ].map(([label, val]) => (
-            <div key={label} className="flex justify-between px-4 py-2.5 text-sm" style={{ borderBottom:"1px solid var(--border)" }}>
-              <span style={{ color:"var(--muted)" }}>{label}</span>
-              <span className="font-semibold" style={{ color:"var(--ink)" }}>{val}</span>
-            </div>
-          ))}
-          <div className="flex justify-between px-4 py-3 text-sm font-bold" style={{ background:"var(--ink)", color:"#fff" }}>
-            <span>Estimated total</span>
-            <span>${total.toLocaleString()}</span>
-          </div>
-        </div>
-
-        {/* Payment options */}
-        <h2 className="text-xs font-semibold uppercase tracking-wide mb-3 mt-6" style={{ color:"var(--muted)" }}>Payment Options</h2>
-        <div className="grid grid-cols-1 gap-2 mb-6">
-          {[
-            ["Pay in full", `$${total.toLocaleString()}`, "Full payment at time of purchase"],
-            ["10% deposit", `$${deposit10.toLocaleString()}`, `Balance of $${(total - deposit10).toLocaleString()} due at vehicle handover`],
-            ["20% deposit", `$${deposit20.toLocaleString()}`, `Balance of $${(total - deposit20).toLocaleString()} due at vehicle handover`],
-          ].map(([option, amount, note]) => (
-            <div key={option} className="flex items-center justify-between px-4 py-3 rounded-xl" style={{ border:"1px solid var(--border)" }}>
-              <div>
-                <p className="text-sm font-semibold" style={{ color:"var(--ink)" }}>{option}</p>
-                <p className="text-xs" style={{ color:"var(--muted)" }}>{note}</p>
+            {listing.price && (
+              <div className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>
+                Listed at ${listing.price.toLocaleString()}
               </div>
-              <p className="font-mono font-bold text-sm" style={{ color:"var(--accent-dark)" }}>{amount}</p>
-            </div>
-          ))}
+            )}
+          </div>
+        </div>
+      )}
+
+      {!user && (
+        <div className="rounded-xl px-4 py-3 mb-5 text-sm" style={{ background: "var(--paper)", color: "var(--muted)" }}>
+          <Link href="/login" className="font-semibold underline" style={{ color: "var(--ink)" }}>Log in</Link> to send a quote request.
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div>
+          <label className="text-xs font-semibold block mb-1" style={{ color: "var(--muted)" }}>
+            Your offer price ($) <span style={{ color: "var(--muted)", fontWeight: 400 }}>— optional</span>
+          </label>
+          <input
+            className="w-full border rounded-xl px-3 py-2.5 text-sm"
+            style={{ borderColor: "var(--border)" }}
+            type="number" step="100" min="0"
+            placeholder={listing?.price ? String(listing.price) : "Enter your offer"}
+            value={offerPrice}
+            onChange={(e) => setOfferPrice(e.target.value)}
+          />
         </div>
 
-        <p className="text-xs leading-relaxed" style={{ color:"var(--muted)" }}>
-          This quote is valid for 7 days from the date of issue. Prices are subject to change based on market conditions and final vehicle inspection. All transactions are facilitated through AutoMarket's secure payment system. This document does not constitute a binding contract.
-        </p>
-      </div>
+        <div>
+          <label className="text-xs font-semibold block mb-1" style={{ color: "var(--muted)" }}>
+            Message to seller *
+          </label>
+          <textarea
+            className="w-full border rounded-xl px-3 py-2.5 text-sm resize-none"
+            style={{ borderColor: "var(--border)" }}
+            rows={5}
+            placeholder="Tell the seller about yourself, any questions about the vehicle, preferred meeting location, etc."
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            required
+          />
+        </div>
+
+        {error && (
+          <div className="text-sm px-3 py-2.5 rounded-xl" style={{ background: "var(--danger-soft)", color: "var(--danger)" }}>
+            {error}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={submitting || !user}
+          className="w-full rounded-2xl py-4 text-sm font-bold text-white disabled:opacity-60"
+          style={{ background: "var(--ink)" }}>
+          {submitting ? "Sending…" : "Send quote request"}
+        </button>
+      </form>
     </main>
   );
 }

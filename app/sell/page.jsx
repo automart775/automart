@@ -8,9 +8,23 @@ const COUNTRIES = ["United States","United Kingdom","Canada","Germany","France",
 const FUEL_TYPES = ["Gas","Hybrid","Electric","Diesel","Flex-Fuel"];
 const TRANS = ["Automatic","Manual","CVT","Semi-Auto"];
 const BODY_STYLES = ["Sedan","SUV","Truck","Coupe","Hatchback","Convertible","Minivan","Wagon","Van"];
-const DURATIONS = [3, 5, 7, 14];
 
-// Compress image client-side before upload — cuts file size ~60-70%
+const QUICK_DURATIONS = [
+  { label: "6h",  hours: 6 },
+  { label: "12h", hours: 12 },
+  { label: "1d",  hours: 24 },
+  { label: "2d",  hours: 48 },
+  { label: "3d",  hours: 72 },
+];
+
+function formatDuration(hours) {
+  if (hours < 24) return `${hours} hour${hours !== 1 ? "s" : ""}`;
+  const d = Math.floor(hours / 24);
+  const h = hours % 24;
+  if (h === 0) return `${d} day${d !== 1 ? "s" : ""}`;
+  return `${d}d ${h}h`;
+}
+
 async function compress(file, maxPx = 1400, quality = 0.82) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -24,33 +38,23 @@ async function compress(file, maxPx = 1400, quality = 0.82) {
       canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
       canvas.toBlob(
         (blob) => resolve(new File([blob], file.name, { type: "image/jpeg" })),
-        "image/jpeg",
-        quality
+        "image/jpeg", quality
       );
     };
     img.src = url;
   });
 }
 
-// Poll until the auction row is visible in DB — fixes "Auction not found" on redirect
-async function waitForAuction(listingId, maxTries = 8) {
-  for (let i = 0; i < maxTries; i++) {
-    await new Promise((r) => setTimeout(r, 600));
-    const { data } = await supabase
-      .from("auctions")
-      .select("id")
-      .eq("listing_id", listingId)
-      .maybeSingle();
-    if (data) return true;
-  }
-  return false;
-}
-
 export default function SellPage() {
   const router = useRouter();
   const [role, setRole] = useState(null);
   const [type, setType] = useState("fixed_price");
-  const [duration, setDuration] = useState(3);
+
+  // Duration state
+  const [durationMode, setDurationMode] = useState("preset");  // "preset" | "custom"
+  const [durationHours, setDurationHours] = useState(72);       // preset selection
+  const [customHours, setCustomHours] = useState("");            // custom input
+
   const [form, setForm] = useState({
     make: "", model: "", year: String(new Date().getFullYear()),
     price: "", startingBid: "", mileage: "",
@@ -91,14 +95,25 @@ export default function SellPage() {
     setPreviews((prev) => prev.filter((_, idx) => idx !== i));
   };
 
+  const getTotalHours = () => {
+    if (durationMode === "custom") {
+      const h = parseInt(customHours, 10);
+      return isNaN(h) || h < 1 ? 0 : Math.min(h, 336);
+    }
+    return durationHours;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (files.length === 0) { setError("Add at least one photo."); return; }
+    if (type === "auction" && durationMode === "custom" && getTotalHours() < 1) {
+      setError("Enter a valid custom duration (minimum 1 hour).");
+      return;
+    }
     setError("");
     setSubmitting(true);
 
     try {
-      // 1. Create listing
       setProgress("Creating listing…");
       const { data: listingId, error: le } = await supabase.rpc("create_listing", {
         p_listing_type: type,
@@ -116,34 +131,29 @@ export default function SellPage() {
       });
       if (le) throw new Error(le.message);
 
-      // 2. Upload photos (already compressed)
       for (let i = 0; i < files.length; i++) {
         setProgress(`Uploading photo ${i + 1} of ${files.length}…`);
         const path = `${listingId}/${Date.now()}-${i}.jpg`;
-        const { error: se } = await supabase.storage
-          .from("listing-images")
-          .upload(path, files[i]);
+        const { error: se } = await supabase.storage.from("listing-images").upload(path, files[i]);
         if (se) throw new Error("Photo upload failed: " + se.message);
-        await supabase.rpc("add_listing_image", {
-          p_listing_id: listingId,
-          p_storage_path: path,
-          p_sort_order: i,
-        });
+        await supabase.rpc("add_listing_image", { p_listing_id: listingId, p_storage_path: path, p_sort_order: i });
       }
 
-      // 3. Auction setup
       if (type === "auction") {
         setProgress("Setting up auction…");
+        const totalHours = getTotalHours();
+        const endsAt = new Date(Date.now() + totalHours * 3600000).toISOString();
+
         const { error: ae } = await supabase.rpc("create_auction", {
           p_listing_id: listingId,
           p_start_price: parseFloat(form.startingBid),
-          p_days: duration,
+          p_ends_at: endsAt,
         });
         if (ae) throw new Error(ae.message);
 
-        // Wait for DB to commit before redirecting — fixes "Auction not found"
+        // Fixed 2s delay after RPC confirms success — no polling needed
         setProgress("Almost there…");
-        await waitForAuction(listingId);
+        await new Promise((r) => setTimeout(r, 2000));
         router.push(`/auction/${listingId}`);
       } else {
         await new Promise((r) => setTimeout(r, 500));
@@ -156,52 +166,36 @@ export default function SellPage() {
     }
   };
 
-  if (role === null) return (
-    <main className="p-8 text-sm" style={{ color: "var(--muted)" }}>Loading…</main>
-  );
+  if (role === null) return <main className="p-8 text-sm" style={{ color: "var(--muted)" }}>Loading…</main>;
 
   if (role === "buyer") return (
     <main className="mx-auto px-4 py-16 text-center" style={{ maxWidth: 420 }}>
       <div className="text-5xl mb-4">🔒</div>
       <h1 className="text-xl font-bold mb-2" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Sellers only</h1>
-      <p className="text-sm mb-5" style={{ color: "var(--muted)" }}>
-        You need a seller account to list vehicles.
-      </p>
+      <p className="text-sm mb-5" style={{ color: "var(--muted)" }}>You need a seller account to list vehicles.</p>
       <a href="/signup" className="inline-block px-5 py-3 rounded-xl text-sm font-semibold text-white"
-        style={{ background: "var(--ink)" }}>
-        Create seller account
-      </a>
+        style={{ background: "var(--ink)" }}>Create seller account</a>
     </main>
   );
 
+  const totalHours = getTotalHours();
+
   return (
     <main className="mx-auto px-4 py-8 pb-28" style={{ maxWidth: 600 }}>
-      <h1 className="text-2xl font-bold mb-1" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>
-        List a vehicle
-      </h1>
-      <p className="text-sm mb-6" style={{ color: "var(--muted)" }}>
-        Takes about 2 minutes.
-      </p>
+      <h1 className="text-2xl font-bold mb-1" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>List a vehicle</h1>
+      <p className="text-sm mb-6" style={{ color: "var(--muted)" }}>Takes about 2 minutes.</p>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-5">
 
         {/* Listing type */}
         <div>
-          <p className="text-xs font-semibold mb-2 uppercase tracking-wide" style={{ color: "var(--muted)" }}>
-            Listing type
-          </p>
+          <p className="text-xs font-semibold mb-2 uppercase tracking-wide" style={{ color: "var(--muted)" }}>Listing type</p>
           <div className="grid grid-cols-2 gap-3">
-            {[
-              ["fixed_price", "Fixed price",  "Set a price — buyer contacts you"],
-              ["auction",     "Live auction",  "Buyers bid — highest wins"],
-            ].map(([val, label, sub]) => (
-              <button key={val} type="button"
-                onClick={() => setType(val)}
+            {[["fixed_price","Fixed price","Set a price — buyer contacts you"],
+              ["auction","Live auction","Buyers bid — highest wins"]].map(([val, label, sub]) => (
+              <button key={val} type="button" onClick={() => setType(val)}
                 className="rounded-2xl p-4 text-left border-2"
-                style={{
-                  borderColor: type === val ? "var(--ink)" : "var(--border)",
-                  background:  type === val ? "var(--ink-soft)" : "white",
-                }}>
+                style={{ borderColor: type === val ? "var(--ink)" : "var(--border)", background: type === val ? "var(--ink-soft)" : "white" }}>
                 <div className="text-sm font-bold" style={{ color: "var(--ink)" }}>{label}</div>
                 <div className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>{sub}</div>
               </button>
@@ -211,7 +205,7 @@ export default function SellPage() {
 
         {/* Make / Model */}
         <div className="grid grid-cols-2 gap-3">
-          {[["Make *", "make", "Toyota"], ["Model *", "model", "Camry SE"]].map(([label, field, ph]) => (
+          {[["Make *","make","Toyota"],["Model *","model","Camry SE"]].map(([label, field, ph]) => (
             <div key={field}>
               <label className="text-xs font-semibold block mb-1" style={{ color: "var(--muted)" }}>{label}</label>
               <input className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--border)" }}
@@ -236,7 +230,7 @@ export default function SellPage() {
 
         {/* Specs */}
         <div className="grid grid-cols-3 gap-3">
-          {[["Fuel", "fuel_type", FUEL_TYPES], ["Transmission", "transmission", TRANS], ["Body", "body_style", BODY_STYLES]].map(([label, field, opts]) => (
+          {[["Fuel","fuel_type",FUEL_TYPES],["Transmission","transmission",TRANS],["Body","body_style",BODY_STYLES]].map(([label, field, opts]) => (
             <div key={field}>
               <label className="text-xs font-semibold block mb-1" style={{ color: "var(--muted)" }}>{label}</label>
               <select className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--border)" }}
@@ -276,36 +270,81 @@ export default function SellPage() {
           <div>
             <label className="text-xs font-semibold block mb-1" style={{ color: "var(--muted)" }}>Asking price ($) *</label>
             <input className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--border)" }}
-              type="number" placeholder="24500" value={form.price} onChange={set("price")} required />
+              type="number" step="100" min="0" placeholder="24500"
+              value={form.price} onChange={set("price")} required />
           </div>
         ) : (
           <div className="flex flex-col gap-4">
+            {/* Starting bid */}
             <div>
               <label className="text-xs font-semibold block mb-1" style={{ color: "var(--muted)" }}>Starting bid ($) *</label>
               <input className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--border)" }}
-                type="number" placeholder="5000" value={form.startingBid} onChange={set("startingBid")} required />
+                type="number" step="100" min="0" placeholder="5000"
+                value={form.startingBid} onChange={set("startingBid")} required />
             </div>
+
+            {/* Duration */}
             <div>
               <label className="text-xs font-semibold block mb-2" style={{ color: "var(--muted)" }}>
                 Auction duration
               </label>
-              <div className="grid grid-cols-4 gap-2">
-                {DURATIONS.map((d) => (
-                  <button key={d} type="button"
-                    onClick={() => setDuration(d)}
-                    className="rounded-xl py-3 text-sm font-bold border"
+
+              {/* Quick presets */}
+              <div className="grid grid-cols-5 gap-2 mb-3">
+                {QUICK_DURATIONS.map(({ label, hours }) => (
+                  <button key={label} type="button"
+                    onClick={() => { setDurationMode("preset"); setDurationHours(hours); }}
+                    className="rounded-xl py-2.5 text-sm font-bold border"
                     style={{
-                      background: duration === d ? "var(--ink)" : "white",
-                      color: duration === d ? "white" : "var(--ink)",
-                      borderColor: duration === d ? "var(--ink)" : "var(--border)",
+                      background: durationMode === "preset" && durationHours === hours ? "var(--ink)" : "white",
+                      color: durationMode === "preset" && durationHours === hours ? "white" : "var(--ink)",
+                      borderColor: durationMode === "preset" && durationHours === hours ? "var(--ink)" : "var(--border)",
                     }}>
-                    {d} days
+                    {label}
                   </button>
                 ))}
               </div>
-              <p className="text-xs mt-1.5" style={{ color: "var(--muted)" }}>
-                Bidding closes {duration} {duration === 1 ? "day" : "days"} after you publish.
-              </p>
+
+              {/* Custom toggle */}
+              <button type="button"
+                onClick={() => setDurationMode(durationMode === "custom" ? "preset" : "custom")}
+                className="w-full rounded-xl py-2.5 text-sm font-semibold border mb-3"
+                style={{
+                  background: durationMode === "custom" ? "var(--ink)" : "white",
+                  color: durationMode === "custom" ? "white" : "var(--ink)",
+                  borderColor: durationMode === "custom" ? "var(--ink)" : "var(--border)",
+                }}>
+                {durationMode === "custom" ? "Custom duration selected" : "Set custom duration"}
+              </button>
+
+              {/* Custom hours input */}
+              {durationMode === "custom" && (
+                <div className="flex items-center gap-3 rounded-xl px-4 py-3"
+                  style={{ background: "var(--paper)" }}>
+                  <input
+                    type="number"
+                    min="1" max="336"
+                    placeholder="e.g. 18"
+                    value={customHours}
+                    onChange={(e) => setCustomHours(e.target.value)}
+                    className="w-24 border rounded-lg px-3 py-2 text-sm font-semibold text-center"
+                    style={{ borderColor: "var(--border)" }}
+                  />
+                  <span className="text-sm" style={{ color: "var(--muted)" }}>hours</span>
+                  {customHours && parseInt(customHours) >= 1 && (
+                    <span className="text-sm font-semibold ml-auto" style={{ color: "var(--ink)" }}>
+                      = {formatDuration(parseInt(customHours))}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Summary */}
+              {totalHours >= 1 && (
+                <p className="text-xs mt-2" style={{ color: "var(--muted)" }}>
+                  Auction ends in <strong>{formatDuration(totalHours)}</strong> after you publish.
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -313,7 +352,7 @@ export default function SellPage() {
         {/* Photos */}
         <div>
           <label className="text-xs font-semibold block mb-2" style={{ color: "var(--muted)" }}>
-            Photos * ({files.length}/10) — auto-compressed for faster upload
+            Photos * ({files.length}/10) — auto-compressed
           </label>
           <div className="flex flex-wrap gap-2">
             {previews.map((src, i) => (
@@ -350,10 +389,7 @@ export default function SellPage() {
           <button type="submit" disabled={submitting}
             className="w-full rounded-2xl py-4 text-sm font-bold text-white disabled:opacity-60"
             style={{ background: "var(--ink)" }}>
-            {submitting
-              ? (progress || "Publishing…")
-              : type === "auction" ? "Start auction" : "Publish listing"
-            }
+            {submitting ? (progress || "Publishing…") : type === "auction" ? "Start auction" : "Publish listing"}
           </button>
         </div>
 

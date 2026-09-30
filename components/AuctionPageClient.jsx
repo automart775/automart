@@ -18,67 +18,69 @@ function Skeleton() {
     <main className="mx-auto px-4 pb-20" style={{ maxWidth: 600 }}>
       <div className="w-full h-64 rounded-2xl mt-4 animate-pulse" style={{ background: "var(--paper)" }} />
       <div className="mt-4 h-6 w-52 rounded-lg animate-pulse" style={{ background: "var(--paper)" }} />
-      <div className="mt-2 h-4 w-32 rounded-lg animate-pulse" style={{ background: "var(--paper)" }} />
-      <div className="mt-6 h-28 rounded-2xl animate-pulse" style={{ background: "var(--paper)" }} />
-      <p className="text-xs text-center mt-4" style={{ color: "var(--muted)" }}>Setting up auction…</p>
+      <div className="mt-2 h-4 w-36 rounded-lg animate-pulse" style={{ background: "var(--paper)" }} />
+      <div className="mt-6 h-32 rounded-2xl animate-pulse" style={{ background: "var(--paper)" }} />
+      <p className="text-xs text-center mt-3" style={{ color: "var(--muted)" }}>Loading auction…</p>
     </main>
   );
 }
 
 export default function AuctionPageClient({ id }) {
-  const [listing, setListing] = useState(null);
+  const [data, setData] = useState(null);
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
     let attempts = 0;
-    const MAX = 8;        // 8 × 700ms = up to ~5.6 seconds of retries
-    const DELAY = 700;
+    const MAX = 10;     // 10 × 800ms = up to 8 seconds
+    const DELAY = 800;
 
-    const fetchData = async () => {
+    const fetchAll = async () => {
       try {
-        const { data, error } = await supabase
-          .from("listings")
-          .select(`
-            id, make, model, year, mileage, fuel_type, transmission,
-            body_style, description, location_city, location_country,
-            listing_images ( storage_path, sort_order ),
-            profiles!seller_id ( full_name, dealer_verified, role ),
-            auctions ( id, start_price, current_bid, ends_at, status, bid_increment )
-          `)
-          .eq("id", id)
-          .single();
+        // TWO SEPARATE QUERIES — avoids FK join failures from RLS
+        const [listingRes, auctionRes] = await Promise.all([
+          supabase
+            .from("listings")
+            .select(`
+              id, make, model, year, mileage, fuel_type, transmission,
+              body_style, description, location_city, location_country,
+              listing_images ( storage_path, sort_order ),
+              profiles!seller_id ( full_name, dealer_verified, role )
+            `)
+            .eq("id", id)
+            .single(),
+          supabase
+            .from("auctions")
+            .select("id, start_price, current_bid, ends_at, status, bid_increment")
+            .eq("listing_id", id)
+            .maybeSingle(),
+        ]);
 
         if (cancelled) return;
 
-        // Normalize auctions — Supabase may return object or array
-        const aArr = data?.auctions
-          ? Array.isArray(data.auctions) ? data.auctions : [data.auctions]
-          : [];
-        const auction = aArr[0];
+        const listing = listingRes.data;
+        const auction = auctionRes.data;
 
-        if (!error && data && auction) {
-          // ✅ Got everything — render
-          const imgs = (data.listing_images || []).sort((a, b) => a.sort_order - b.sort_order);
-          const seller = data.profiles
-            ? Array.isArray(data.profiles) ? data.profiles[0] : data.profiles
+        if (listing && auction) {
+          const imgs = (listing.listing_images || []).sort((a, b) => a.sort_order - b.sort_order);
+          const seller = listing.profiles
+            ? Array.isArray(listing.profiles) ? listing.profiles[0] : listing.profiles
             : {};
 
-          setListing({
-            id: data.id,
-            make: data.make,
-            model: data.model,
-            year: data.year,
-            mileage: data.mileage,
-            fuel_type: data.fuel_type,
-            transmission: data.transmission,
-            body_style: data.body_style,
-            description: data.description,
-            location_city: data.location_city,
-            location_country: data.location_country,
+          setData({
+            id: listing.id,
+            make: listing.make,
+            model: listing.model,
+            year: listing.year,
+            mileage: listing.mileage,
+            fuel_type: listing.fuel_type,
+            transmission: listing.transmission,
+            body_style: listing.body_style,
+            description: listing.description,
+            location_city: listing.location_city,
+            location_country: listing.location_country,
             imageUrl: getPublicUrl(imgs[0]?.storage_path) || FALLBACK,
-            allImages: imgs.map(i => getPublicUrl(i.storage_path)).filter(Boolean),
             seller_name: seller?.full_name || "Seller",
             seller_verified: seller?.dealer_verified || false,
             seller_role: seller?.role || "buyer",
@@ -90,24 +92,22 @@ export default function AuctionPageClient({ id }) {
             bid_increment: auction.bid_increment || 100,
           });
         } else if (attempts < MAX) {
-          // ⏳ Auction row not committed yet — retry
           attempts++;
-          setTimeout(fetchData, DELAY);
+          setTimeout(fetchAll, DELAY);
         } else {
-          // ❌ Gave up after all retries
           setNotFound(true);
         }
       } catch {
         if (!cancelled && attempts < MAX) {
           attempts++;
-          setTimeout(fetchData, DELAY);
+          setTimeout(fetchAll, DELAY);
         } else if (!cancelled) {
           setNotFound(true);
         }
       }
     };
 
-    fetchData();
+    fetchAll();
     return () => { cancelled = true; };
   }, [id]);
 
@@ -116,41 +116,35 @@ export default function AuctionPageClient({ id }) {
       <div className="text-4xl mb-3">🔍</div>
       <p className="font-semibold" style={{ color: "var(--ink)" }}>Auction not found</p>
       <p className="text-sm mt-1" style={{ color: "var(--muted)" }}>
-        This auction may have ended or the link is incorrect.
+        It may have ended or the link is incorrect.
       </p>
     </main>
   );
 
-  if (!listing) return <Skeleton />;
+  if (!data) return <Skeleton />;
 
   return (
     <main className="mx-auto px-4 pb-20" style={{ maxWidth: 600 }}>
-      {/* Hero image */}
       <div className="w-full h-64 rounded-2xl overflow-hidden mt-4" style={{ background: "var(--paper)" }}>
-        <img
-          src={listing.imageUrl}
-          alt={`${listing.year} ${listing.make} ${listing.model}`}
-          className="w-full h-full object-cover"
-        />
+        <img src={data.imageUrl} alt={`${data.year} ${data.make} ${data.model}`}
+          className="w-full h-full object-cover" />
       </div>
 
-      {/* Title block */}
       <div className="mt-4">
         <h1 className="text-xl font-bold" style={{ fontFamily: "'Space Grotesk',sans-serif", color: "var(--ink)" }}>
-          {listing.year} {listing.make} {listing.model}
+          {data.year} {data.make} {data.model}
         </h1>
-        <div className="flex items-center gap-3 mt-1 flex-wrap text-sm" style={{ color: "var(--muted)" }}>
-          {listing.mileage && <span>{listing.mileage}</span>}
-          {listing.fuel_type && <span>· {listing.fuel_type}</span>}
-          {listing.transmission && <span>· {listing.transmission}</span>}
-          {listing.location_city && (
-            <span>· {listing.location_city}{listing.location_country ? `, ${listing.location_country}` : ""}</span>
+        <div className="flex items-center gap-2 mt-1 flex-wrap text-sm" style={{ color: "var(--muted)" }}>
+          {data.mileage && <span>{data.mileage}</span>}
+          {data.fuel_type && <span>· {data.fuel_type}</span>}
+          {data.transmission && <span>· {data.transmission}</span>}
+          {data.location_city && (
+            <span>· {data.location_city}{data.location_country ? `, ${data.location_country}` : ""}</span>
           )}
         </div>
       </div>
 
-      {/* Bid interface */}
-      <AuctionBidClient listing={listing} />
+      <AuctionBidClient listing={data} />
     </main>
   );
 }
