@@ -52,15 +52,15 @@ export default function QuotePage() {
     setError("");
     setSubmitting(true);
 
-    const { error: e } = await supabase.rpc("create_quote_request", {
+    const { error: rpcError } = await supabase.rpc("create_quote_request", {
       p_listing_id: listingId,
       p_offer_price: offerPrice ? parseFloat(offerPrice) : null,
       p_message: message.trim(),
     });
 
     setSubmitting(false);
-    if (e) {
-      setError("Couldn't send quote request: " + e.message);
+    if (rpcError) {
+      setError("Couldn't send quote request: " + rpcError.message);
     } else {
       setSubmitted(true);
     }
