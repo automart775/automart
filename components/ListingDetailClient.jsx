@@ -141,7 +141,7 @@ export default function ListingDetailClient({ listing }) {
   const router = useRouter();
   const [tab, setTab] = useState("Overview");
   const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const busy = false;
   const [showBuyModal, setShowBuyModal] = useState(false);
   const [quoteMsg, setQuoteMsg] = useState("");
 
@@ -172,14 +172,7 @@ export default function ListingDetailClient({ listing }) {
   const getQuote = async () => {
     const user = await requireLogin();
     if (!user) return;
-    setBusy(true);
-    const { error } = await supabase.from("quote_requests").insert({ listing_id: listing.id, buyer_id: user.id });
-    setBusy(false);
-    if (error) {
-      setQuoteMsg("Couldn't send quote request: " + error.message);
-    } else {
-      router.push(`/quote/${listing.id}`);
-    }
+    router.push(`/quote/${listing.id}`);
   };
 
   const location = [listing.location_city, listing.location_country].filter(Boolean).join(", ");
